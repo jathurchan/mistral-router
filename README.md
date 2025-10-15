@@ -1,7 +1,9 @@
-# `llm-mux` - Developer Framework for Cost-Efficient LLM Applications
+# `llm-mux` - Framework for Cost-Efficient LLM Applications
 
-> A lightweight FastAPI framework for cost-efficient LLM applications — plug in your API key and get a routing gateway in under 60 seconds.
-> A production-ready LLM routing framework that minimizes cost, reduces latency, and provides built-in observability.
+> llm-mux is a lightweight FastAPI framework for cost-efficient LLM applications — plug in your Mistral API key and get a routing gateway in under 60 seconds.
+> By default, it uses Mistral models for tiered routing, but the architecture is provider-agnostic and can be extended to other backends.
+
+A production-ready LLM routing framework that minimizes cost, reduces latency, and provides built-in observability.
 
 ## Motivation
 
@@ -32,7 +34,7 @@ Most teams repeatedly:
 ### Docker (Recommended)
 
 ```bash
-git clone https://github.com/yourusername/llm-mux.git
+git clone https://github.com/jathurchan/llm-mux.git
 cd llm-mux
 cp .env.example .env   # Add your MISTRAL_API_KEY
 docker-compose up --build
@@ -53,23 +55,23 @@ python demo.py
 
 ```plaintext
    Client
-     │
-     ▼
+    │
+    ▼
 ┌───────────────┐
 │ FastAPI       │   main.py
 │ Gateway       │
-└──────┬────────┘
-       │
-       ▼
+└───┬───────────┘
+    │
+    ▼
 ┌───────────────┐
 │ Complexity    │   src/router.py
 │ Router        │───► routes query to model tier
-└──────┬────────┘
-       │
-       ├────────► mistral-small-latest  (fast & cheap)
-       │
-       └────────► mistral-large-latest  (powerful & costly)
-       ▼
+└───┬───────────┘
+    │
+    ├────────► mistral-small-latest  (fast & cheap)
+    │
+    └────────► mistral-large-latest  (powerful & costly)
+    ▼
 ┌───────────────┐
 │ Metrics       │   src/tracker.py
 │ Tracker       │───► cost, latency, tokens, usage
