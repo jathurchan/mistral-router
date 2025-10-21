@@ -1,261 +1,215 @@
-# `llm-mux` - Framework for Cost-Efficient LLM Applications
+# Mistral Router
 
-> llm-mux is a lightweight FastAPI framework for cost-efficient LLM applications — plug in your Mistral API key and get a routing gateway in under 60 seconds.
-> By default, it uses Mistral models for tiered routing, but the architecture is provider-agnostic and can be extended to other backends.
+> A lightweight, high-performance FastAPI gateway that intelligently routes requests to the most appropriate Mistral AI model (`small` vs. `medium`), optimizing for **cost, latency, and capability**.
 
-A production-ready LLM routing framework that minimizes cost, reduces latency, and provides built-in observability.
-
-## Motivation
-
-Building a quick prototype with an LLM is easy. Building a **scalable, cost-efficient, and observable production system** is not.
-
-Most teams repeatedly:
-
-- **Reinvent the wheel** — re-implement routing, tracking, and APIs for every new project.
-- **Fly blind** — ship without cost, latency, or usage visibility.
-- **Burn budget** — use large models for trivial queries.
-
-**llm-mux** solves these problems once — giving developers a clean, extensible **framework** that works from day one.
-
-## Key Features
-
-- **Intelligent Tiered Routing** – Automatically routes queries between small and large LLMs based on complexity, reducing both cost and latency.
-- **Cost Optimization** – Achieves up to **`[TBD]`**% cost savings with negligible impact on response quality.
-- **Built-in Observability** – Exposes real-time metrics for cost, latency, token usage, and routing decisions through a simple API.
-- **Extensible Framework** – Easily add endpoints, integrate new providers, or customize routing rules and caching strategies.
-- **Docker-First** – Runs locally or in production with a single `docker-compose up` command.
-- **Fast Developer Onboarding** – Minimal setup: clone the repo, set an API key, and start building.
-- **Pluggable Middleware** – Supports authentication, rate limiting, logging, and other middleware extensions.
-- **Provider-Agnostic** – Optimized for Mistral but adaptable to OpenAI, Anthropic, vLLM, or custom backends.
-- **Robust Test Coverage** – Over **`[TBD]`**% coverage across core routing and tracking modules.
+This service acts as a smart proxy: it analyzes each request and chooses the right model for the job. It provides automatic fallbacks, cost and latency tracking, and a Prometheus-compatible metrics endpoint.
 
 ## Quick Start
 
-### Docker (Recommended)
+### 1. Clone and Install
 
 ```bash
-git clone https://github.com/jathurchan/llm-mux.git
-cd llm-mux
-cp .env.example .env   # Add your MISTRAL_API_KEY
-docker-compose up --build
-```
-
-- Service available at [http://localhost:8000](http://localhost:8000)
-- API docs at [http://localhost:8000/docs](http://localhost:8000/docs)
-
-### Local Python Run
-
-```bash
+git clone https://github.com/jathurchan/mistral-router.git
+cd mistral-router
 pip install -r requirements.txt
-export MISTRAL_API_KEY="your_api_key_here"
-python demo.py
 ```
+
+### 2. Environment Configuration
+
+```bash
+# Required
+export MISTRAL_API_KEY="your_api_key_here"
+
+# Optional
+export ROUTER_LENGTH_THRESHOLD=120  # Prompts shorter than this use 'small'
+export ROUTER_CLIENT_TIMEOUT_S=15
+export ROUTER_MAX_INPUT_TOKENS=4096
+```
+
+### 3. Run
+
+```bash
+# For development (with hot-reload)
+uvicorn app.main:app --reload
+
+# Or with Docker
+docker build -t mistral-router .
+docker run -p 8000:8000 -e MISTRAL_API_KEY=$MISTRAL_API_KEY mistral-router
+```
+
+The service is now running at `http://localhost:8000`.
+
+## API Usage & Demo
+
+The router mimics the official Mistral API. Use it as a drop-in replacement by setting `"model": "auto"` to enable intelligent routing.
+
+### Example 1: Simple Request → `small`
+
+A short prompt is automatically routed to `mistral-small-latest` for low latency and cost. The router's decision is returned in the response headers.
+
+```bash
+curl -i -X POST http://localhost:8000/v1/chat/completions \
+ -H "Content-Type: application/json" \
+ -H "Authorization: Bearer $MISTRAL_API_KEY" \
+ -d '{
+    "model": "auto",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}]
+ }'
+```
+
+**Response Headers:**
+
+```plaintext
+HTTP/1.1 200 OK
+X-Router-Model: mistral-small-latest
+X-Router-Latency-MS: 112
+X-Router-Cost-USD: 0.0000056
+...
+```
+
+(Response body is the standard Mistral API completion JSON)
+
+### Example 2: Complex Request → `medium`
+
+A request using `tools` (function calling) is automatically upgraded to `mistral-medium-latest`.
+
+Bash
+
+```bash
+curl -i -X POST http://localhost:8000/v1/chat/completions \
+ -H "Content-Type: application/json" \
+ -H "Authorization: Bearer $MISTRAL_API_KEY" \
+ -d '{
+    "model": "auto",
+    "messages": [{"role": "user", "content": "Extract user info from text..."}],
+    "tools": [ ... ]
+ }'
+```
+
+**Response Headers:**
+
+```bash
+HTTP/1.1 200 OK
+X-Router-Model: mistral-medium-latest
+X-Router-Latency-MS: 322
+X-Router-Cost-USD: 0.0001520
+...
+```
+
+### Example 3: Metrics
+
+A Prometheus-compatible metrics endpoint is exposed for monitoring.
+
+```bash
+curl http://localhost:8000/metrics
+```
+
+**Output:**
+
+```plaintext
+# HELP router_requests_total Total number of requests
+router_requests_total{model="mistral-small-latest",status_code="200"} 1.0
+router_requests_total{model="mistral-medium-latest",status_code="200"} 1.0
+# HELP router_fallback_total Total fallbacks from small to medium
+router_fallback_total{from="small",to="medium"} 0.0
+...
+```
+
+## Problem & Solution
+
+### The Problem
+
+Defaulting to a single large model (e.g., `mistral-medium-latest`) for all requests is simple but inefficient. This approach is:
+
+- **Costly:** Simple prompts are billed at the same high rate as complex ones.
+- **Slow:** Users wait longer than necessary for simple answers.
+- **Brittle:** A single model failure or a low-quality response fails the entire request.
+
+Cost Comparison (200 tokens in / 200 tokens out)
+
+| **Model**               | **Cost per turn** | **1M turns** | **5M turns** |
+| ----------------------- | ----------------- | ------------ | ------------ |
+| `mistral-small-latest`  | $0.00008          | $80          | $400         |
+| `mistral-medium-latest` | $0.00048          | $480         | $2,400       |
+
+This router provides a **6x cost-saving** potential on simple queries.
+
+### The Solution
+
+This service acts as an intelligent proxy that provides:
+
+- **Dynamic Routing:** Uses prompt length and capability requirements (e.g., `tools`) to select the most cost-effective model.
+- **Automatic Fallback:** If `small` fails or returns a low-quality response, the router automatically retries the request with `medium`.
+- **Full Visibility:** Injects `X-Router-*` headers with cost, latency, and model choice. Exposes a `/metrics` endpoint.
+- **Manual Override:** A user can always bypass routing and force a specific model (e.g., `"model": "mistral-medium-latest"`).
 
 ## Architecture
 
 ```plaintext
-   Client
-    │
-    ▼
-┌───────────────┐
-│ FastAPI       │   main.py
-│ Gateway       │
-└───┬───────────┘
-    │
-    ▼
-┌───────────────┐
-│ Complexity    │   src/router.py
-│ Router        │───► routes query to model tier
-└───┬───────────┘
-    │
-    ├────────► mistral-small-latest  (fast & cheap)
-    │
-    └────────► mistral-large-latest  (powerful & costly)
-    ▼
-┌───────────────┐
-│ Metrics       │   src/tracker.py
-│ Tracker       │───► cost, latency, tokens, usage
-└───────────────┘
+┌─────────────┐      ┌─────────────────┐      ┌─────────────────────┐
+│   Client    │ ───▶ │ FastAPI Gateway │ ───▶ │    Routing Logic    │
+│  (uses SDK) │      │ (localhost:8000)│      │ 1. Length?          │
+└─────────────┘      └─────────────────┘      │ 2. Capabilities?    │
+                                              │ 3. Fallback?        │
+                                              └─────┬───────────────┘
+                                                    │
+                                 ┌──────────────--──┴─────────────────┐
+                                 │                                    │
+                                 ▼                                    ▼
+                       ┌──────────────────────┐               ┌───────────────────────┐
+                       │ mistral-small-latest │               │ mistral-medium-latest │
+                       └──────────────────────┘               └───────────────────────┘
 ```
 
-| **Component**         | **Role**                                                                            |
-| --------------------- | ----------------------------------------------------------------------------------- |
-| FastAPI Gateway       | Receives and validates incoming requests; exposes `/query` and `/metrics` endpoints |
-| Complexity Router     | Scores incoming queries and decides the optimal model tier                          |
-| Metrics Tracker       | Logs cost, latency, token usage, and routing decisions                              |
-| SDK-Ready Integration | Easy to extend, plug in other providers or caching layers                           |
-| Docker Compose        | Ensures consistent and fast deployment locally and in production                    |
+- **FastAPI Gateway:** A single `/v1/chat/completions` endpoint proxies the official Mistral API.
+- **Routing Logic:** A simple rules engine checks each request:
+  - Is `tools` (function calling) present? → Use `medium`.
+  - Is prompt length > `ROUTER_LENGTH_THRESHOLD`? → Use `medium`.
+  - Default → Use `small`.
+- **Fallback Handler:** If the `small` model fails or its response is flagged as low-quality (e.g., empty), the logic transparently retries the request on `medium`.
+- **Metrics:** A `Prometheus`-compatible collector tracks counters and histograms for all requests, fallbacks, and costs.
 
-## Project Structure
+## Testing & Evaluation
 
-```plaintext
-llm-mux/
-├── src/
-│   ├── router.py          # Complexity scoring and model tier routing logic
-│   ├── tracker.py         # Cost, latency, and usage tracking
-│   ├── models.py          # Pydantic schemas for requests and responses
-│   ├── mistral_client.py  # Wrapper for Mistral API calls
-│   └── __init__.py
-│
-├── tests/
-│   ├── test_router.py     # Unit tests for routing logic
-│   ├── test_tracker.py    # Unit tests for metrics tracking
-│   ├── test_client.py     # Tests for Mistral client wrapper
-│   └── __init__.py
-│
-├── main.py                # FastAPI entrypoint (gateway layer)
-├── demo.py                # Simple demo runner with example queries
-├── requirements.txt       # Python dependencies
-├── requirements-dev.txt   # Dev/test dependencies
-├── dockerfile             # Docker image definition
-├── docker-compose.yml     # One-command local deployment
-├── .env.example           # Example environment variables (Mistral API key)
-├── .gitignore
-└── README.md
-```
+### Unit Tests
 
-## Demo Results
-
-| **Metric**           | **Always-Large Baseline** | **llm-mux (Smart Routing)** | **Improvement** |
-| -------------------- | ------------------------- | --------------------------- | --------------- |
-| Total Cost (10k req) | [TBD]                     | [TBD]                       | [TBD]           |
-| P50 Latency          | [TBD]                     | [TBD]                       | [TBD]           |
-| P95 Latency          | [TBD]                     | [TBD]                       | [TBD]           |
-| Small Model Usage    | [TBD]                     | [TBD]                       | —               |
-| Avg. Quality Score*  | [TBD]                     | [TBD]                       | [TBD]           |
-
-## API Reference
-
-### `POST /query`
-
-Submits a query to the routing gateway.
-
-**Request:**
-
-```json
-{"query": "Compare and contrast monoliths vs. microservices"}
-```
-
-**Response:**
-
-```json
-{
-  "answer": "...",
-  "routing_decision": "Routed to LARGE (score: 0.90)",
-  "model_used": "mistral-large-latest",
-  "metrics": {
-    "latency_ms": 1421,
-    "tokens_in": 8,
-    "tokens_out": 210,
-    "cost_usd": 0.002552
-  }
-}
-```
-
-### `GET /metrics`
-
-Retrieves cumulative usage, cost, and performance statistics.
-
-**Response:**
-
-```json
-{
-  "total_requests": 152,
-  "total_cost": "$0.24",
-  "avg_latency_ms": 845,
-  "cost_savings_vs_always_large": "71.8%",
-  "small_model_usage_percent": "76.3%",
-  "model_breakdown": {
-    "mistral-small-latest": 116,
-    "mistral-large-latest": 36
-  }
-}
-```
-
-## Extending llm-mux
-
-| **Use Case**                  | **How to Extend**                              |
-| ----------------------------- | ---------------------------------------------- |
-| Add new routing rules         | Modify `src/router.py`                         |
-| Add endpoints                 | Extend `main.py` or add new routers            |
-| Add caching                   | Wrap responses with Redis or in-memory caching |
-| Add auth                      | Integrate FastAPI middleware                   |
-| Use another provider          | Swap out model client in `router.py`           |
-| Integrate observability stack | Plug Prometheus / Grafana via metrics endpoint |
-
-## Testing
+A full `pytest` suite covers all routing logic, fallback behavior, metadata injection, policy overrides, and metrics.
 
 ```bash
-pip install -r requirements-dev.txt
-pytest --cov=src tests/
+pytest
 ```
 
-| **Module** | **Coverage** |
-| ---------- | ------------ |
-| router.py  | `[TBD]`      |
-| tracker.py | `[TBD]`      |
-| Overall    | `[TBD]`      |
+### Evaluation Script
 
-## FAQ: Design Decisions and Tradeoffs
+An offline script (`eval.py`) runs a sample dataset through the router vs. an "always-medium" baseline to demonstrate real-world savings.
 
-### Why use FastAPI for the gateway?
+```bash
+python eval.py
+```
 
-FastAPI provides an async-native, high-performance API layer with strong typing and auto-generated documentation.
+**Sample Output:**
 
-- It allows rapid iteration on routing logic and API endpoints.
-- The contract between client apps and the backend is explicit and easy to maintain.
-- Middleware such as authentication or rate limiting can be added with minimal effort.
+| **policy**    | **model**             | **tokens_in** | **tokens_out** | **latency_ms** | **cost_usd** | **reason**      |
+| ------------- | --------------------- | ------------- | -------------- | -------------- | ------------ | --------------- |
+| router        | mistral-small-latest  | 11            | 15             | `[TBD]`        | `[TBD]`      | simple          |
+| router        | mistral-medium-latest | 210           | 34             | `[TBD]`        | `[TBD]`      | requires: tools |
+| always-medium | mistral-medium-latest | 11            | 15             | `[TBD]`        | `[TBD]`      | baseline        |
+| always-medium | mistral-medium-latest | 210           | 34             | `[TBD]`        | `[TBD]`      | baseline        |
 
-    **Tradeoff:** For more advanced use cases (e.g., high-throughput streaming), you’d need additional components or a worker layer.
+**Results:**
 
-### Why is the project Docker-first?
+- **Router Cost:** `[TBD]`
+- **Baseline Cost:** `[TBD]`
+- **Savings:** `[TBD]`
+- **Avg. Latency:** Router: `[TBD]` | Baseline: `[TBD]`
 
-Because reviewers or new contributors should be able to clone and run the project **in one command** — no environment issues, no hidden setup steps.
+## Future Work
 
-- Ensures identical behavior across local and test environments.
-- Makes it easy to run in interviews, hackathons, or early production settings.
+- **ML-based Routing:** Train a small classifier to predict prompt "difficulty" for more nuanced routing.
+- **Budget Policies:** Allow users to set per-API-key budgets or SLOs (e.g., "prefer_cost" vs. "prefer_latency").
+- **Dashboard:** A simple Streamlit/Gradio UI to visualize the `/metrics` data.
+- **Shadow Routing:** Send requests to both models in parallel to A/B test routing logic without impacting users.
 
-    **Tradeoff:** Slightly larger image size and slower build than a bare-metal setup.
+## Author
 
-### Why start with heuristic routing instead of an ML model?
-
-Rule-based routing is **fast**, transparent, and good enough to demonstrate cost-aware orchestration.
-
-- Sub-millisecond routing decisions.
-- Easy to debug and reason about.
-- Clear upgrade path toward learned routing if needed.
-
-    **Tradeoff:** Heuristics don’t adapt automatically to changing query patterns and may misroute edge cases.
-
-### Why make the architecture provider-agnostic?
-
-Even though the framework is designed around Mistral models, it intentionally doesn’t lock into a single provider.
-
-- Mistral remains the default, but other APIs (e.g., OpenAI, vLLM) can be plugged in easily.
-- Protects against vendor lock-in and allows comparison or fallback strategies.
-
-    **Tradeoff:** Maintaining a clean abstraction layer adds slight complexity.
-
-### Why position llm-mux as a framework, not just a project?
-
-Most teams repeatedly build the same backend foundation for LLM apps — routing, tracking, metrics, and auth. This project solves that once.
-
-- Faster prototyping and onboarding.
-- Clean extension points for product-specific logic.
-- Provides a minimal, production-ready baseline out of the box.
-
-    **Tradeoff:** Some teams will still need to customize components to match their product or infrastructure.
-
-## Future Directions
-
-- ML-based routing model
-- Request caching layer
-- More routing tiers (tiny / large / specialized)
-- Integration with RAG pipelines
-- Streaming support
-
-## License & Author
-
-**License:** MIT License — free to use and modify.
-
-**Author:** Jathurchan Selvakumar
+Jathurchan Selvakumar
