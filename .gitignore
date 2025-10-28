@@ -1,0 +1,8 @@
+# ===== SECRETS & ENVIRONMENT =====
+.env
+
+# ===== PYTHON =====
+venv/
+
+# ===== OS FILES =====
+.DS_Store
