@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     router_token_threshold: int = 150
     router_conversation_threshold: int = 6
     router_client_timeout_s: int = 15
+    router_health_check_timeout_s: float = 5.0
 
     # Models
     model_small: str = "mistral-small-latest"
