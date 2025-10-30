@@ -8,7 +8,7 @@ Includes:
 - GenerationParams — generation controls
 - RouterDecision — validated routing result
 - RequestMetadata — lifecycle tracking
-- Helpers — capability checks, token estimation, logging/metrics adapters
+- Helpers — token estimation, logging/metrics adapters
 
 Principles:
 - Immutable enums
@@ -21,11 +21,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, computed_field, field_validator
 
 from app.config import settings
+from app.api.schemas import Message
 
 class ModelType(str, Enum):
     """Logical model labels."""
@@ -65,6 +66,14 @@ class ModelType(str, Enum):
             ModelType.MEDIUM: "Mistral Medium (High-Capability)",
             ModelType.AUTO: "Auto-Routing (Intelligent Selection)",
         }.get(self, self.value)
+    
+    def api_name(self) -> str:
+        """Get the actual API model name from settings."""
+        if self.is_small():
+            return settings.model_small
+        if self.is_medium():
+            return settings.model_medium
+        return "unknown"
 
     def get_relative_cost(self) -> float:
         """Relative cost multiplier (small = 1.0)."""
@@ -94,14 +103,14 @@ class ModelType(str, Enum):
         if m in mapping:
             return mapping[m]
         
+        if "auto" in m:
+            return cls.AUTO
         if "small" in m:
             return cls.SMALL
         if "medium" in m:
             return cls.MEDIUM
-        if "auto" in m:
-            return cls.AUTO
         
-        return cls.SMALL
+        return cls.AUTO
 
     @classmethod
     def is_valid_api_model(cls, model: str) -> bool:
@@ -184,19 +193,14 @@ class GenerationParams(BaseModel):
 
     temperature: float = Field(
         default=0.7,
-        ge=0.0,
-        le=2.0,
         description="Sampling temperature for generation"
         )
     top_p: float = Field(
         default=1.0,
-        ge=0.0,
-        le=1.0,
         description="Nucleus sampling parameter"
         )
     max_tokens: Optional[int] = Field(
         default=None,
-        ge=1,
         description="Maximum tokens to generate"
         )
     random_seed: Optional[int] = Field(
@@ -207,20 +211,6 @@ class GenerationParams(BaseModel):
         default=False,
         description="Enable Mistral safety prompt injection"
         )
-
-    @field_validator("temperature")
-    @classmethod
-    def validate_temperature(cls, v: float) -> float:
-        if not 0.0 <= v <= 2.0:
-            raise ValueError("temperature out of range")
-        return v
-
-    @field_validator("top_p")
-    @classmethod
-    def validate_top_p(cls, v: float) -> float:
-        if not 0.0 <= v <= 1.0:
-            raise ValueError("top_p out of range")
-        return v
 
     def to_dict(self) -> Dict[str, Any]:
         """API payload dict (excludes None)."""
@@ -263,7 +253,7 @@ class RouterDecision(BaseModel):
     @classmethod
     def validate_model(cls, v: ModelType) -> ModelType:
         if v == ModelType.AUTO:
-            raise ValueError("AUTO cannot be final")
+            raise ValueError("AUTO cannot be final routing decision")
         return v
 
     @computed_field
@@ -312,14 +302,6 @@ class RequestMetadata(BaseModel):
     including costs, timing, and fallback information.
     """
 
-    BASE_SCORE = 0.5
-    SUCCESS_BONUS = 0.2
-    LATENCY_THRESHOLD_MS = 500
-    LATENCY_BONUS = 0.1
-    NO_FALLBACK_BONUS = 0.1
-    TOKEN_THRESHOLD = 2000
-    TOKEN_BONUS = 0.1
-
     request_id: str = Field(description="Unique request identifier")
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
@@ -347,7 +329,6 @@ class RequestMetadata(BaseModel):
     )
     error: Optional[str] = Field(default=None, description="Error message if failed")
     context: Dict[str, Any] = Field(default_factory=dict, description="Additional context")
-
 
     class Config:
         use_enum_values = True
@@ -387,36 +368,22 @@ class RequestMetadata(BaseModel):
     @property
     def selected_model_actual(self) -> str:
         """Configured API model ID for the selected logical model."""
-        return ModelType.from_string(self.selected_model).api_name() if isinstance(self.selected_model, str) else self.selected_model.api_name()
+        model_str = str(self.selected_model)
+        return ModelType.from_string(model_str).api_name()
 
     @computed_field
     @property
     def original_model_actual(self) -> Optional[str]:
         if self.original_model is None:
             return None
-        return ModelType.from_string(self.original_model).api_name() if isinstance(self.original_model, str) else self.original_model.api_name()
-
-    @computed_field
-    @property
-    def response_quality_score(self) -> float:
-        score = self.BASE_SCORE
-
-        if self.is_successful:
-            score += self.SUCCESS_BONUS
-        if self.latency_ms and self.latency_ms < self.LATENCY_THRESHOLD_MS:
-            score += self.LATENCY_BONUS
-        if not self.fallback_occurred:
-            score += self.NO_FALLBACK_BONUS
-        if self.total_tokens and self.total_tokens < self.TOKEN_THRESHOLD:
-            score += self.TOKEN_BONUS
-
-        return min(score, 1.0)
+        model_str = str(self.original_model)
+        return ModelType.from_string(model_str).api_name()
 
     def to_response_headers(self) -> Dict[str, str]:
         """HTTP response headers (actual + logical)."""
         headers = {
-            "X-Router-Model": self.selected_model_actual,            # actual API ID
-            "X-Router-Model-Logical": str(self.selected_model),      # logical label
+            "X-Router-Model": self.selected_model_actual,
+            "X-Router-Model-Logical": str(self.selected_model),
             "X-Router-Reason": self.routing_reason.value,
             "X-Router-Fallback": str(self.fallback_occurred).lower(),
             "X-Router-Request-ID": self.request_id,
@@ -475,8 +442,6 @@ class RequestMetadata(BaseModel):
         if self.error:
             data["error"] = self.error
 
-        data["quality_score"] = round(self.response_quality_score, 2)
-
         return data
 
     def to_metrics_labels(self) -> Dict[str, str]:
@@ -501,7 +466,7 @@ class RequestMetadata(BaseModel):
 class TokenEstimator:
     """Heuristic token estimator (~4 chars/token)."""
 
-    CHARS_PER_TOKEN = 4.0
+    CHARS_PER_TOKEN = 4.0   # standard heuristic
 
     @classmethod
     def estimate_from_text(cls, text: str) -> int:
@@ -510,32 +475,14 @@ class TokenEstimator:
         return max(1, int(len(text) / cls.CHARS_PER_TOKEN))
 
     @classmethod
-    def estimate_from_messages(cls, messages: List[Dict[str, Any]]) -> int:
-        total_chars = sum(len(m.get("content", "")) for m in messages)
-        overhead = len(messages) * 10
+    def estimate_from_messages(cls, messages: List[Message]) -> int:
+        total_chars = 0
+        for msg in messages:
+            if msg.content:
+                total_chars += len(msg.content)
+
+        overhead = len(messages) * 5 # for roles/etc...
         return cls.estimate_from_text("x" * total_chars) + overhead
-    
-
-class ModelCapabilityChecker:
-    """Model capability checks."""
-
-    @staticmethod
-    def supports_tools(model: ModelType) -> bool:
-        return model.supports_tools()
-
-    @staticmethod
-    def supports_json_mode(model: ModelType) -> bool:
-        return model.supports_json_mode()
-
-    @staticmethod
-    def requires_upgrade(
-        requested_model: ModelType, required_capability: Literal["tools", "json_mode"]
-    ) -> bool:
-        if required_capability == "tools":
-            return not ModelCapabilityChecker.supports_tools(requested_model)
-        if required_capability == "json_mode":
-            return not ModelCapabilityChecker.supports_json_mode(requested_model)
-        return False
     
 __all__ = [
     "ModelType",
@@ -545,5 +492,4 @@ __all__ = [
     "RouterDecision",
     "RequestMetadata",
     "TokenEstimator",
-    "ModelCapabilityChecker",
 ]
