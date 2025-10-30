@@ -1,0 +1,47 @@
+services:
+  # Production service with multi-worker support
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mistral-router-prod
+    env_file:
+      - .env
+    environment:
+      - APP_WORKERS=${APP_WORKERS:-4}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '1'
+          memory: 512M
+
+  # Development service with hot-reloading
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mistral-router-dev
+    env_file:
+      - .env
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./app:/app/app:ro  # Read-only to prevent accidental container writes
+      - ./tests:/app/tests:ro
+    command: ["uvicorn", "app.main:app", "--reload", "--host", "0.0.0.0", "--port", "8000"]
+    # No restart policy or healthcheck needed for dev
