@@ -9,7 +9,7 @@ from enum import Enum
 
 from app.api.schemas import ChatCompletionRequest, Message, SystemMessage, UserMessage
 from app.config import settings
-from models import (
+from core.models import (
     ModelType,
     RoutingReason,
     RouterDecision,

@@ -247,7 +247,6 @@ class RouterDecision(BaseModel):
 
     class Config:
         frozen = True   # Immutable
-        use_enum_values = True
 
     @field_validator("model")
     @classmethod
@@ -329,9 +328,6 @@ class RequestMetadata(BaseModel):
     )
     error: Optional[str] = Field(default=None, description="Error message if failed")
     context: Dict[str, Any] = Field(default_factory=dict, description="Additional context")
-
-    class Config:
-        use_enum_values = True
 
     @computed_field
     @property
