@@ -364,7 +364,7 @@ class RequestMetadata(BaseModel):
     @property
     def selected_model_actual(self) -> str:
         """Configured API model ID for the selected logical model."""
-        model_str = str(self.selected_model)
+        model_str = self.selected_model.value
         return ModelType.from_string(model_str).api_name()
 
     @computed_field
@@ -372,14 +372,14 @@ class RequestMetadata(BaseModel):
     def original_model_actual(self) -> Optional[str]:
         if self.original_model is None:
             return None
-        model_str = str(self.original_model)
+        model_str = self.original_model.value
         return ModelType.from_string(model_str).api_name()
 
     def to_response_headers(self) -> Dict[str, str]:
         """HTTP response headers (actual + logical)."""
         headers = {
             "X-Router-Model": self.selected_model_actual,
-            "X-Router-Model-Logical": str(self.selected_model),
+            "X-Router-Model-Logical": self.selected_model.value,
             "X-Router-Reason": self.routing_reason.value,
             "X-Router-Fallback": str(self.fallback_occurred).lower(),
             "X-Router-Request-ID": self.request_id,
@@ -399,7 +399,7 @@ class RequestMetadata(BaseModel):
 
         if self.original_model is not None:
             headers["X-Router-Original-Model"] = self.original_model_actual or ""
-            headers["X-Router-Original-Model-Logical"] = str(self.original_model)
+            headers["X-Router-Original-Model-Logical"] = self.original_model.value
 
         return headers
 
@@ -408,7 +408,7 @@ class RequestMetadata(BaseModel):
         data = {
             "request_id": self.request_id,
             "timestamp": self.timestamp.isoformat(),
-            "model_logical": str(self.selected_model),
+            "model_logical": self.selected_model.value,
             "model_actual": self.selected_model_actual,
             "reason": self.routing_reason.value,
             "category": self.category.value,
@@ -432,7 +432,7 @@ class RequestMetadata(BaseModel):
             data["tokens_total"] = self.total_tokens
 
         if self.original_model is not None:
-            data["original_model_logical"] = str(self.original_model)
+            data["original_model_logical"] = self.original_model.value
             data["original_model_actual"] = self.original_model_actual
 
         if self.error:
@@ -443,7 +443,7 @@ class RequestMetadata(BaseModel):
     def to_metrics_labels(self) -> Dict[str, str]:
         """Prometheus labels (logical for cardinality control)."""
         return {
-            "model": str(self.selected_model),
+            "model": self.selected_model.value,
             "reason": self.routing_reason.value,
             "category": self.category.value,
             "fallback": str(self.fallback_occurred).lower(),
@@ -456,7 +456,7 @@ class RequestMetadata(BaseModel):
         cost = f", ${self.cost_usd:.6f}" if self.cost_usd else ""
         latency = f", {self.latency_ms:.0f}ms" if self.latency_ms else ""
 
-        return f"{status} {self.selected_model} -> {self.selected_model_actual}{fb} ({self.routing_reason.value}{cost}{latency})"
+        return f"{status} {self.selected_model.value} -> {self.selected_model_actual}{fb} ({self.routing_reason.value}{cost}{latency})"
     
 
 class TokenEstimator:
