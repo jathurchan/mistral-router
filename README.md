@@ -1,6 +1,6 @@
 # `mistral-router`
 
-This project is a high-performance, intelligent API gateway built with Python and FastAPI. It acts as a smart proxy for the **Mistral AI API**, automatically routing requests to the most appropriate and cost-effective model (small vs. medium) based on the request's content and requirements.
+A lightweight API gateway built with Python and FastAPI. It acts as a smart proxy for the **Mistral AI API**, **automatically routing requests to the most appropriate and cost-effective model** (small vs. medium) based on the request's content and requirements.
 
 The goal is to drastically reduce API costs by using cheaper, faster models for simple queries, while transparently escalating to more powerful models for complex tasks, ensuring both cost-efficiency and high-quality responses.
 
