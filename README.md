@@ -297,3 +297,7 @@ This MVP provides a solid, production-ready foundation. Future enhancements coul
 ## Author
 
 Jathurchan Selvakumar
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](/LICENSE) file for details.
