@@ -1,33 +1,4 @@
 services:
-  # Production service with multi-worker support
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: mistral-router-prod
-    env_file:
-      - .env
-    environment:
-      - APP_WORKERS=${APP_WORKERS:-4}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    ports:
-      - "8000:8000"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 5s
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 1G
-        reservations:
-          cpus: '1'
-          memory: 512M
-
   # Development service with hot-reloading
   dev:
     build:
