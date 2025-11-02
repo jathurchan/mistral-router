@@ -1,12 +1,85 @@
-# Mistral Router
+# `mistral-router`
 
-> A lightweight, high-performance FastAPI gateway that intelligently routes requests to the most appropriate Mistral AI model (`small` vs. `medium`), optimizing for **cost, latency, and capability**.
+This project is a high-performance, intelligent API gateway built with Python and FastAPI. It acts as a smart proxy for the **Mistral AI API**, automatically routing requests to the most appropriate and cost-effective model (small vs. medium) based on the request's content and requirements.
 
-This service acts as a smart proxy: it analyzes each request and chooses the right model for the job. It provides automatic fallbacks, cost and latency tracking, and a Prometheus-compatible metrics endpoint.
+The goal is to drastically reduce API costs by using cheaper, faster models for simple queries, while transparently escalating to more powerful models for complex tasks, ensuring both cost-efficiency and high-quality responses.
 
-## Quick Start
+## Problem & Solution
 
-### 1. Clone and Install
+### The Problem
+
+Using a single, powerful Mistral AI model (e.g., `medium-latest`) for all tasks is simple but financially inefficient. Simple queries, like "What is the capital of France?", are billed at the same high rate as complex, multi-page analysis tasks. This leads to unnecessarily high costs and often slower response times for simple prompts.
+
+### The Solution
+
+This service introduces a "virtual" model called **`"auto"`**. When a request is sent to `"auto"`, the gateway analyzes it against a set of rules to determine its complexity.
+
+* **Simple prompts** are routed to the **small model**, saving cost and improving latency.
+* **Complex prompts** (e..g., those requiring reasoning, function calling, or JSON output) are routed to the **medium model**.
+* **Resilience** is built-in: if the small model fails or returns a low-quality response, the service automatically retries the request with the medium model, ensuring the user still gets a valid answer.
+
+### Cost Savings
+
+This routing logic can lead to significant cost reductions. Based on the pricing defined in the project's configuration, the cost-saving potential is clear:
+
+| Model | Input Cost (per 1M tokens) | Output Cost (per 1M tokens) |
+| :--- | :--- | :--- |
+| **Small** | $0.10 | $0.30 |
+| **Medium** | $0.40 | $2.00 |
+| **Savings** | **4x** | **\~6.7x** |
+
+This gateway provides up to **\~6x cost-saving potential** on simple queries.
+
+-----
+
+## Evaluation & Performance
+
+The router's effectiveness is not just theoretical. A benchmark script (`eval.py`) was run against a test suite of 20 prompts (10 simple, 10 complex) to compare the router policy against a baseline policy of "always using the medium model."
+
+The results, stored in `eval_results.json`, confirm the router's accuracy and efficiency.
+
+### Benchmark Results (`eval_results.json`)
+
+| Policy | Total Cost (USD) | Avg. Latency (ms) | Routing Accuracy |
+| :--- | :--- | :--- | :--- |
+| **Router** | **$0.0444** | 17,230 ms | **100%** (20/20) |
+| **Baseline** | $0.0487 | 18,361 ms | N/A |
+
+#### Savings
+
+* **Cost Reduction (USD): $0.00429**
+* **Cost Reduction (Percent): 8.81%**
+
+*Note: The 8.81% saving reflects this specific 50/50 test suite. Workloads with a higher percentage of simple queries will realize significantly greater savings, approaching the theoretical maximum.*
+
+-----
+
+## How It Works: Architecture & Routing Logic
+
+The gateway acts as a proxy layer. All routing logic is contained within the service, requiring no changes to the client application other than updating the API endpoint.
+
+The router applies rules in the following order of priority:
+
+1. **Manual Override**: If the user specifies an exact model (e.g., `mistral-small-latest` or `mistral-medium-latest`), the router honors that choice.
+2. **Capability-Required**: The request is routed to **medium** if it uses features the small model doesn't support, such as:
+      * `tools` (function calling)
+      * `response_format: {"type": "json_object"}`
+3. **Heuristic Analysis**: The request is routed to **medium** if it's flagged as "complex" by any of the following heuristics (configurable in `.env`):
+      * **Conversation Length**: `len(messages) > ROUTER_CONVERSATION_THRESHOLD` (Default: 6)
+      * **Token Estimate**: `estimated_tokens > ROUTER_TOKEN_THRESHOLD` (Default: 150)
+      * **Prompt Length**: `total_length > ROUTER_LENGTH_THRESHOLD` (Default: 120)
+      * **Complexity Keywords**: The prompt contains keywords like *analyze, compare and contrast, evaluate, derive, synthesize, complex, etc.*
+4. **Default**: If no other rule matches, the request is considered "simple" and is routed to the **small model**.
+
+-----
+
+## Setup and Usage
+
+This project is designed to be easy to set up and run.
+
+### 1\. Prerequisites
+
+First, clone the repository and install the required Python packages.
 
 ```bash
 git clone https://github.com/jathurchan/mistral-router.git
@@ -14,41 +87,57 @@ cd mistral-router
 pip install -r requirements.txt
 ```
 
-### 2. Environment Configuration
+### 2\. Environment Configuration
+
+The service is configured using environment variables. Copy the example file to create your own configuration:
 
 ```bash
-# Required
-export MISTRAL_API_KEY="your_api_key_here"
-
-# Optional
-export ROUTER_LENGTH_THRESHOLD=120  # Prompts shorter than this use 'small'
-export ROUTER_CLIENT_TIMEOUT_S=15
-export ROUTER_MAX_INPUT_TOKENS=4096
+cp .env.example .env
 ```
 
-### 3. Run
+Now, edit the `.env` file and add your API key:
+
+```ini
+# .env
+MISTRAL_API_KEY=your_mistral_api_key_here
+```
+
+### 3\. Running the Service
+
+You can run the service directly with `uvicorn` or use the provided `docker-compose` file for a containerized setup.
+
+#### Option A: Docker (Recommended)
+
+This is the easiest way to run the service and is consistent with the `eval.py` test script. The `docker-compose.yml` file will build the image and run the service, exposing it on port **8001**.
 
 ```bash
-# For development (with hot-reload)
+docker-compose up --build
+```
+
+The service is now running at `http://localhost:8001`.
+
+#### Option B: Local Uvicorn
+
+You can also run the FastAPI app directly. It will run on port **8000** by default.
+
+```bash
 uvicorn app.main:app --reload
-
-# Or with Docker
-docker build -t mistral-router .
-docker run -p 8000:8000 -e MISTRAL_API_KEY=$MISTRAL_API_KEY mistral-router
 ```
 
-The service is now running at `http://localhost:8000`.
+-----
 
 ## API Usage & Demo
 
-The router mimics the official Mistral API. Use it as a drop-in replacement by setting `"model": "auto"` to enable intelligent routing.
+Use the Mistral API Router as a drop-in replacement for the official Mistral API by pointing your client to the router's URL (e.g., `http://localhost:8001`) and setting `"model": "auto"`.
+
+> *All examples below assume you are using the docker-compose setup on port 8001*
 
 ### Example 1: Simple Request → `small`
 
-A short prompt is automatically routed to `mistral-small-latest` for low latency and cost. The router's decision is returned in the response headers.
+This simple prompt will be routed to the `small` model.
 
 ```bash
-curl -i -X POST http://localhost:8000/v1/chat/completions \
+curl -i -X POST http://localhost:8001/v1/chat/completions \
  -H "Content-Type: application/json" \
  -H "Authorization: Bearer $MISTRAL_API_KEY" \
  -d '{
@@ -61,154 +150,130 @@ curl -i -X POST http://localhost:8000/v1/chat/completions \
 
 ```plaintext
 HTTP/1.1 200 OK
-X-Router-Model: mistral-small-latest
-X-Router-Latency-MS: 112
-X-Router-Cost-USD: 0.0000056
+...
+x-router-model: mistral-small-latest
+x-router-model-logical: small
+x-router-reason: default_small
+x-router-cost-usd: 0.0000181
+x-router-latency-ms: 998.29
 ...
 ```
 
-(Response body is the standard Mistral API completion JSON)
+The response body is the standard API completion. The headers show the router's decision-making.
 
 ### Example 2: Complex Request → `medium`
 
-A request using `tools` (function calling) is automatically upgraded to `mistral-medium-latest`.
-
-Bash
+This prompt uses the keyword "Analyze", triggering the `heuristic_keyword` rule and routing to the `medium` model.
 
 ```bash
-curl -i -X POST http://localhost:8000/v1/chat/completions \
+curl -i -X POST http://localhost:8001/v1/chat/completions \
  -H "Content-Type: application/json" \
  -H "Authorization: Bearer $MISTRAL_API_KEY" \
  -d '{
     "model": "auto",
-    "messages": [{"role": "user", "content": "Extract user info from text..."}],
-    "tools": [ ... ]
+    "messages": [{"role": "user", "content": "Analyze the pros and cons of renewable energy."}]
  }'
 ```
 
 **Response Headers:**
 
-```bash
+```plaintext
 HTTP/1.1 200 OK
-X-Router-Model: mistral-medium-latest
-X-Router-Latency-MS: 322
-X-Router-Cost-USD: 0.0001520
+...
+x-router-model: mistral-medium-latest
+x-router-model-logical: medium
+x-router-reason: heuristic_keyword
+x-router-cost-usd: 0.0038508
+x-router-latency-ms: 28263.67
 ...
 ```
 
-### Example 3: Metrics
+### Example 3: Manual Override
 
-A Prometheus-compatible metrics endpoint is exposed for monitoring.
+You can always bypass the router logic by specifying an exact model.
 
 ```bash
-curl http://localhost:8000/metrics
+curl -i -X POST http://localhost:8001/v1/chat/completions \
+ -H "Content-Type: application/json" \
+ -H "Authorization: Bearer $MISTRAL_API_KEY" \
+ -d '{
+    "model": "mistral-medium-latest",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}]
+ }'
+```
+
+**Response Headers:**
+
+```plaintext
+HTTP/1.1 200 OK
+...
+x-router-model: mistral-medium-latest
+x-router-model-logical: medium
+x-router-reason: manual_override
+...
+```
+
+### Example 4: Observability & Metrics
+
+The service exposes a Prometheus-compatible metrics endpoint for monitoring.
+
+```bash
+curl http://localhost:8001/metrics
 ```
 
 **Output:**
 
 ```plaintext
-# HELP router_requests_total Total number of requests
-router_requests_total{model="mistral-small-latest",status_code="200"} 1.0
-router_requests_total{model="mistral-medium-latest",status_code="200"} 1.0
-# HELP router_fallback_total Total fallbacks from small to medium
-router_fallback_total{from="small",to="medium"} 0.0
+# HELP router_requests_total Total number of requests processed
+router_requests_total{fallback="false",model="small",status_code="200"} 10.0
+router_requests_total{fallback="false",model="medium",status_code="200"} 10.0
+# HELP router_request_latency_ms Request latency in milliseconds
+router_request_latency_ms_bucket{le="1000.0",model="small"} 4.0
 ...
+# HELP router_cost_usd Request cost in USD
+router_cost_usd_bucket{le="0.005",model="medium"} 9.0
+...
+# HELP router_tokens_total Total tokens processed
+router_tokens_total{model="small",type="input"} 107.0
+router_tokens_total{model="small",type="output"} 1341.0
+router_tokens_total{model="medium",type="input"} 236.0
+router_tokens_total{model="medium",type="output"} 22944.0
+# HELP router_active_requests Number of requests currently being processed
+router_active_requests 0.0
 ```
 
-## Problem & Solution
+-----
 
-### The Problem
+## How to Test
 
-Defaulting to a single large model (e.g., `mistral-medium-latest`) for all requests is simple but inefficient. This approach is:
-
-- **Costly:** Simple prompts are billed at the same high rate as complex ones.
-- **Slow:** Users wait longer than necessary for simple answers.
-- **Brittle:** A single model failure or a low-quality response fails the entire request.
-
-Cost Comparison (200 tokens in / 200 tokens out)
-
-| **Model**               | **Cost per turn** | **1M turns** | **5M turns** |
-| ----------------------- | ----------------- | ------------ | ------------ |
-| `mistral-small-latest`  | $0.00008          | $80          | $400         |
-| `mistral-medium-latest` | $0.00048          | $480         | $2,400       |
-
-This router provides a **6x cost-saving** potential on simple queries.
-
-### The Solution
-
-This service acts as an intelligent proxy that provides:
-
-- **Dynamic Routing:** Uses prompt length and capability requirements (e.g., `tools`) to select the most cost-effective model.
-- **Automatic Fallback:** If `small` fails or returns a low-quality response, the router automatically retries the request with `medium`.
-- **Full Visibility:** Injects `X-Router-*` headers with cost, latency, and model choice. Exposes a `/metrics` endpoint.
-- **Manual Override:** A user can always bypass routing and force a specific model (e.g., `"model": "mistral-medium-latest"`).
-
-## Architecture
-
-```plaintext
-┌─────────────┐      ┌─────────────────┐      ┌─────────────────────┐
-│   Client    │ ───▶ │ FastAPI Gateway │ ───▶ │    Routing Logic    │
-│  (uses SDK) │      │ (localhost:8000)│      │ 1. Length?          │
-└─────────────┘      └─────────────────┘      │ 2. Capabilities?    │
-                                              │ 3. Fallback?        │
-                                              └─────┬───────────────┘
-                                                    │
-                                 ┌──────────────--──┴─────────────────┐
-                                 │                                    │
-                                 ▼                                    ▼
-                       ┌──────────────────────┐               ┌───────────────────────┐
-                       │ mistral-small-latest │               │ mistral-medium-latest │
-                       └──────────────────────┘               └───────────────────────┘
-```
-
-- **FastAPI Gateway:** A single `/v1/chat/completions` endpoint proxies the official Mistral API.
-- **Routing Logic:** A simple rules engine checks each request:
-  - Is `tools` (function calling) present? → Use `medium`.
-  - Is prompt length > `ROUTER_LENGTH_THRESHOLD`? → Use `medium`.
-  - Default → Use `small`.
-- **Fallback Handler:** If the `small` model fails or its response is flagged as low-quality (e.g., empty), the logic transparently retries the request on `medium`.
-- **Metrics:** A `Prometheus`-compatible collector tracks counters and histograms for all requests, fallbacks, and costs.
-
-## Testing & Evaluation
-
-### Unit Tests
-
-A full `pytest` suite covers all routing logic, fallback behavior, metadata injection, policy overrides, and metrics.
-
-```bash
-pytest
-```
+The project's functionality can be easily verified using the provided evaluation script.
 
 ### Evaluation Script
 
-An offline script (`eval.py`) runs a sample dataset through the router vs. an "always-medium" baseline to demonstrate real-world savings.
+To replicate the benchmark results and test the live router, you can run the `eval.py` script. This script runs the full test suite against the live `"auto"` endpoint and the baseline ("always medium") policy.
+
+**Make sure the router is running (e.g., via `docker-compose up`) before you run this.**
 
 ```bash
+# Ensure your MISTRAL_API_KEY is exported in your shell
+export MISTRAL_API_KEY="your_key_here"
+
+# Run the evaluation
 python eval.py
 ```
 
-**Sample Output:**
+The script will print a summary of the results and save the full, detailed output to `eval_results.json`.
 
-| **policy**    | **model**             | **tokens_in** | **tokens_out** | **latency_ms** | **cost_usd** | **reason**      |
-| ------------- | --------------------- | ------------- | -------------- | -------------- | ------------ | --------------- |
-| router        | mistral-small-latest  | 11            | 15             | `[TBD]`        | `[TBD]`      | simple          |
-| router        | mistral-medium-latest | 210           | 34             | `[TBD]`        | `[TBD]`      | requires: tools |
-| always-medium | mistral-medium-latest | 11            | 15             | `[TBD]`        | `[TBD]`      | baseline        |
-| always-medium | mistral-medium-latest | 210           | 34             | `[TBD]`        | `[TBD]`      | baseline        |
-
-**Results:**
-
-- **Router Cost:** `[TBD]`
-- **Baseline Cost:** `[TBD]`
-- **Savings:** `[TBD]`
-- **Avg. Latency:** Router: `[TBD]` | Baseline: `[TBD]`
+-----
 
 ## Future Work
 
-- **ML-based Routing:** Train a small classifier to predict prompt "difficulty" for more nuanced routing.
-- **Budget Policies:** Allow users to set per-API-key budgets or SLOs (e.g., "prefer_cost" vs. "prefer_latency").
-- **Dashboard:** A simple Streamlit/Gradio UI to visualize the `/metrics` data.
-- **Shadow Routing:** Send requests to both models in parallel to A/B test routing logic without impacting users.
+This MVP provides a solid, production-ready foundation. Future enhancements could include:
+
+* **Streaming Support**: The current version does not support `stream: true` and will return a 400 error.
+* **ML-based Routing**: Train a small classifier (or use the `small` model itself) to predict prompt "difficulty" for more nuanced routing decisions.
+* **Per-User Policies**: Allow users to set budgets or preferences (e.g., "prefer\_cost" vs. "prefer\_latency") via API keys.
+* **A/B Testing**: Implement "shadow routing" to test new routing logic in parallel without impacting users.
 
 ## Author
 
