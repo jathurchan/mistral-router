@@ -4,24 +4,9 @@ A lightweight API gateway built with Python and FastAPI. It acts as a smart prox
 
 The goal is to drastically reduce API costs by using cheaper, faster models for simple queries, while transparently escalating to more powerful models for complex tasks, ensuring both cost-efficiency and high-quality responses.
 
-```mermaid
-graph TD
-    A[<b>API Request</b> <br> model='auto'] --> B{Mistral Router};
-    B -- Simple --> D[mistral-small-latest];
-    B -- Complex --> E[mistral-medium-latest];
-
-    %% Define styles for each node
-    classDef request fill:#E6F3FF,stroke:#B3D9FF,stroke-width:2px;
-    classDef router fill:#FFF2E6,stroke:#FFD9B3,stroke-width:2px,font-weight:bold;
-    classDef small fill:#E6F9E6,stroke:#B3E6B3,stroke-width:2px;
-    classDef medium fill:#EBE6F9,stroke:#C4B3E6,stroke-width:2px;
-
-    %% Apply the styles to the nodes
-    class A request;
-    class B router;
-    class D small;
-    class E medium;
-```
+<p align="center">
+  <img src="diagram.png" alt="Mistral Router" height="400">
+</p>
 
 ## Problem & Solution
 
